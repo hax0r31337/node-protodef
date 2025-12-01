@@ -8,37 +8,37 @@ const utilsDatatypes = require('./datatypes/compiler-utils')
 const { tryCatch } = require('./utils')
 
 class ProtoDefCompiler {
-  constructor () {
+  constructor() {
     this.readCompiler = new ReadCompiler()
     this.writeCompiler = new WriteCompiler()
     this.sizeOfCompiler = new SizeOfCompiler()
   }
 
-  addTypes (types) {
+  addTypes(types) {
     this.readCompiler.addTypes(types.Read)
     this.writeCompiler.addTypes(types.Write)
     this.sizeOfCompiler.addTypes(types.SizeOf)
   }
 
-  addTypesToCompile (types) {
+  addTypesToCompile(types) {
     this.readCompiler.addTypesToCompile(types)
     this.writeCompiler.addTypesToCompile(types)
     this.sizeOfCompiler.addTypesToCompile(types)
   }
 
-  addProtocol (protocolData, path) {
+  addProtocol(protocolData, path) {
     this.readCompiler.addProtocol(protocolData, path)
     this.writeCompiler.addProtocol(protocolData, path)
     this.sizeOfCompiler.addProtocol(protocolData, path)
   }
 
-  addVariable (key, val) {
+  addVariable(key, val) {
     this.readCompiler.addContextType(key, val)
     this.writeCompiler.addContextType(key, val)
     this.sizeOfCompiler.addContextType(key, val)
   }
 
-  compileProtoDefSync (options = { printCode: false }) {
+  compileProtoDefSync(options = { printCode: false }) {
     const sizeOfCode = this.sizeOfCompiler.generate()
     const writeCode = this.writeCompiler.generate()
     const readCode = this.readCompiler.generate()
@@ -58,31 +58,31 @@ class ProtoDefCompiler {
 }
 
 class CompiledProtodef {
-  constructor (sizeOfCtx, writeCtx, readCtx) {
+  constructor(sizeOfCtx, writeCtx, readCtx) {
     this.sizeOfCtx = sizeOfCtx
     this.writeCtx = writeCtx
     this.readCtx = readCtx
   }
 
-  read (buffer, cursor, type) {
+  read(view, cursor, type) {
     const readFn = this.readCtx[type]
     if (!readFn) { throw new Error('missing data type: ' + type) }
-    return readFn(buffer, cursor)
+    return readFn(view, cursor)
   }
 
-  write (value, buffer, cursor, type) {
+  write(value, view, cursor, type) {
     const writeFn = this.writeCtx[type]
     if (!writeFn) { throw new Error('missing data type: ' + type) }
-    return writeFn(value, buffer, cursor)
+    return writeFn(value, view, cursor)
   }
 
-  setVariable (key, val) {
+  setVariable(key, val) {
     this.sizeOfCtx[key] = val
     this.readCtx[key] = val
     this.writeCtx[key] = val
   }
 
-  sizeOf (value, type) {
+  sizeOf(value, type) {
     const sizeFn = this.sizeOfCtx[type]
     if (!sizeFn) { throw new Error('missing data type: ' + type) }
     if (typeof sizeFn === 'function') {
@@ -92,38 +92,48 @@ class CompiledProtodef {
     }
   }
 
-  createPacketBuffer (type, packet) {
+  createPacketBuffer(type, packet) {
     const length = tryCatch(() => this.sizeOf(packet, type),
       (e) => {
         e.message = `SizeOf error for ${e.field} : ${e.message}`
         throw e
       })
-    const buffer = Buffer.allocUnsafe(length)
-    tryCatch(() => this.write(packet, buffer, 0, type),
+    const buffer = new Uint8Array(length);
+    const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    tryCatch(() => this.write(packet, view, 0, type),
       (e) => {
         e.message = `Write error for ${e.field} : ${e.message}`
         throw e
       })
-    return buffer
+    return buffer;
   }
 
-  parsePacketBuffer (type, buffer, offset = 0) {
-    const { value, size } = tryCatch(() => this.read(buffer, offset, type),
+  parsePacketBuffer(type, buffer, offset = 0, assertSize = true) {
+    let view;
+    if (buffer instanceof DataView) {
+      view = buffer
+    } else if (buffer instanceof ArrayBuffer) {
+      view = new DataView(buffer)
+    } else if (buffer instanceof Uint8Array) {
+      view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+    } else {
+      throw new Error('buffer must be DataView, ArrayBuffer or Uint8Array')
+    }
+
+    const { value, size } = tryCatch(() => this.read(view, offset, type),
       (e) => {
         e.message = `Read error for ${e.field} : ${e.message}`
         throw e
       })
-    return {
-      data: value,
-      metadata: { size },
-      buffer: buffer.slice(0, size),
-      fullBuffer: buffer
+    if (assertSize && size !== buffer.byteLength) {
+      throw new Error(`Size mismatch: expected ${size}, got ${buffer.byteLength}`)
     }
+    return value
   }
 }
 
 class Compiler {
-  constructor () {
+  constructor() {
     this.primitiveTypes = {}
     this.native = {}
     this.context = {}
@@ -138,7 +148,7 @@ class Compiler {
    * @param {*} type
    * @param {*} fn
    */
-  addNativeType (type, fn) {
+  addNativeType(type, fn) {
     this.primitiveTypes[type] = `native.${type}`
     this.native[type] = fn
     this.types[type] = 'native'
@@ -151,9 +161,13 @@ class Compiler {
    * @param {*} type
    * @param {*} fn
    */
-  addContextType (type, fn) {
+  addContextType(type, fn) {
     this.primitiveTypes[type] = `ctx.${type}`
     this.context[type] = fn.toString()
+
+    if (typeof fn === 'function') {
+      console.warn('context_fn')
+    }
   }
 
   /**
@@ -162,11 +176,11 @@ class Compiler {
    * @param {*} type
    * @param {*} maker
    */
-  addParametrizableType (type, maker) {
+  addParametrizableType(type, maker) {
     this.parameterizableTypes[type] = maker
   }
 
-  addTypes (types) {
+  addTypes(types) {
     for (const [type, [kind, fn]] of Object.entries(types)) {
       if (kind === 'native') this.addNativeType(type, fn)
       else if (kind === 'context') this.addContextType(type, fn)
@@ -174,16 +188,16 @@ class Compiler {
     }
   }
 
-  addTypesToCompile (types) {
+  addTypesToCompile(types) {
     for (const [type, json] of Object.entries(types)) {
       // Replace native type, otherwise first in wins
       if (!this.types[type] || this.types[type] === 'native') this.types[type] = json
     }
   }
 
-  addProtocol (protocolData, path) {
+  addProtocol(protocolData, path) {
     const self = this
-    function recursiveAddTypes (protocolData, path) {
+    function recursiveAddTypes(protocolData, path) {
       if (protocolData === undefined) { return }
       if (protocolData.types) { self.addTypesToCompile(protocolData.types) }
       recursiveAddTypes(protocolData[path.shift()], path)
@@ -191,11 +205,11 @@ class Compiler {
     recursiveAddTypes(protocolData, path.slice(0))
   }
 
-  indent (code, indent = '  ') {
+  indent(code, indent = '  ') {
     return code.split('\n').map((line) => indent + line).join('\n')
   }
 
-  getField (name, noAssign) {
+  getField(name, noAssign) {
     const path = name.split('/')
     let i = this.scopeStack.length - 1
     const reserved = ['value', 'enum', 'default', 'size', 'offset']
@@ -227,7 +241,7 @@ class Compiler {
     throw new Error('Unknown field ' + path)
   }
 
-  generate () {
+  generate() {
     this.scopeStack = [{}]
     const functions = []
     for (const type in this.context) {
@@ -246,25 +260,23 @@ class Compiler {
         }
       }
     }
-    return '() => {\n' + this.indent('const ctx = {\n' + this.indent(Object.keys(functions).map((type) => {
+    return this.indent('const ctx = {\n' + this.indent(Object.keys(functions).map((type) => {
       return type + ': ' + functions[type]
-    }).join(',\n')) + '\n}\nreturn ctx') + '\n}'
+    }).join(',\n')) + '\n}\nreturn ctx')
   }
 
   /**
    * Compile the given js code, providing native.{type} to the context, return the compiled types
    * @param {*} code
    */
-  compile (code) {
-    // Local variable to provide some context to eval()
-    const native = this.native // eslint-disable-line
-    const { PartialReadError } = require('./utils') // eslint-disable-line
-    return eval(code)() // eslint-disable-line
+  compile(code) {
+    const { PartialReadError } = require('./utils')
+    return new Function('native', 'PartialReadError', code)(this.native, PartialReadError)
   }
 }
 
 class ReadCompiler extends Compiler {
-  constructor () {
+  constructor() {
     super()
 
     this.addTypes(conditionalDatatypes.Read)
@@ -280,7 +292,7 @@ class ReadCompiler extends Compiler {
     }
   }
 
-  compileType (type) {
+  compileType(type) {
     if (type instanceof Array) {
       if (this.parameterizableTypes[type[0]]) { return this.parameterizableTypes[type[0]](this, type[1]) }
       if (this.types[type[0]] && this.types[type[0]] !== 'native') {
@@ -294,12 +306,12 @@ class ReadCompiler extends Compiler {
     }
   }
 
-  wrapCode (code, args = []) {
+  wrapCode(code, args = []) {
     if (args.length > 0) return '(buffer, offset, ' + args.join(', ') + ') => {\n' + this.indent(code) + '\n}'
     return '(buffer, offset) => {\n' + this.indent(code) + '\n}'
   }
 
-  callType (type, offsetExpr = 'offset', args = []) {
+  callType(type, offsetExpr = 'offset', args = []) {
     if (type instanceof Array) {
       if (this.types[type[0]] && this.types[type[0]] !== 'native') {
         return this.callType(type[0], offsetExpr, Object.values(type[1]))
@@ -314,7 +326,7 @@ class ReadCompiler extends Compiler {
 }
 
 class WriteCompiler extends Compiler {
-  constructor () {
+  constructor() {
     super()
 
     this.addTypes(conditionalDatatypes.Write)
@@ -330,7 +342,7 @@ class WriteCompiler extends Compiler {
     }
   }
 
-  compileType (type) {
+  compileType(type) {
     if (type instanceof Array) {
       if (this.parameterizableTypes[type[0]]) { return this.parameterizableTypes[type[0]](this, type[1]) }
       if (this.types[type[0]] && this.types[type[0]] !== 'native') {
@@ -344,12 +356,12 @@ class WriteCompiler extends Compiler {
     }
   }
 
-  wrapCode (code, args = []) {
+  wrapCode(code, args = []) {
     if (args.length > 0) return '(value, buffer, offset, ' + args.join(', ') + ') => {\n' + this.indent(code) + '\n}'
     return '(value, buffer, offset) => {\n' + this.indent(code) + '\n}'
   }
 
-  callType (value, type, offsetExpr = 'offset', args = []) {
+  callType(value, type, offsetExpr = 'offset', args = []) {
     if (type instanceof Array) {
       if (this.types[type[0]] && this.types[type[0]] !== 'native') {
         return this.callType(value, type[0], offsetExpr, Object.values(type[1]))
@@ -364,7 +376,7 @@ class WriteCompiler extends Compiler {
 }
 
 class SizeOfCompiler extends Compiler {
-  constructor () {
+  constructor() {
     super()
 
     this.addTypes(conditionalDatatypes.SizeOf)
@@ -386,7 +398,7 @@ class SizeOfCompiler extends Compiler {
    * @param {*} type
    * @param {*} fn
    */
-  addNativeType (type, fn) {
+  addNativeType(type, fn) {
     this.primitiveTypes[type] = `native.${type}`
     if (!isNaN(fn)) {
       this.native[type] = (value) => { return fn }
@@ -396,7 +408,7 @@ class SizeOfCompiler extends Compiler {
     this.types[type] = 'native'
   }
 
-  compileType (type) {
+  compileType(type) {
     if (type instanceof Array) {
       if (this.parameterizableTypes[type[0]]) { return this.parameterizableTypes[type[0]](this, type[1]) }
       if (this.types[type[0]] && this.types[type[0]] !== 'native') {
@@ -411,12 +423,12 @@ class SizeOfCompiler extends Compiler {
     }
   }
 
-  wrapCode (code, args = []) {
+  wrapCode(code, args = []) {
     if (args.length > 0) return '(value, ' + args.join(', ') + ') => {\n' + this.indent(code) + '\n}'
     return '(value) => {\n' + this.indent(code) + '\n}'
   }
 
-  callType (value, type, args = []) {
+  callType(value, type, args = []) {
     if (type instanceof Array) {
       if (this.types[type[0]] && this.types[type[0]] !== 'native') {
         return this.callType(value, type[0], Object.values(type[1]))

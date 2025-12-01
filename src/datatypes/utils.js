@@ -1,5 +1,28 @@
 const { getCount, sendCount, calcCount, PartialReadError } = require('../utils')
 
+// Global UTF-8 encoder/decoder for better performance
+const utf8Encoder = new TextEncoder()
+const utf8Decoder = new TextDecoder('utf-8')
+
+// Helper function to get encoder for different encodings
+function getTextDecoder (encoding) {
+  try {
+    return new TextDecoder(encoding)
+  } catch (e) {
+    // Fallback to utf-8 if encoding not supported
+    return utf8Decoder
+  }
+}
+
+function getTextEncoder (encoding) {
+  // TextEncoder only supports utf-8
+  if (encoding === 'utf8' || encoding === 'utf-8') {
+    return utf8Encoder
+  }
+  // For other encodings, we'll need to use a different approach
+  return null
+}
+
 module.exports = {
   bool: [readBool, writeBool, 1, require('../../ProtoDef/schemas/utils.json').bool],
   pstring: [readPString, writePString, sizeOfPString, require('../../ProtoDef/schemas/utils.json').pstring],
@@ -16,8 +39,8 @@ function mapperEquality (a, b) {
   return a === b || parseInt(a) === parseInt(b)
 }
 
-function readMapper (buffer, offset, { type, mappings }, rootNode) {
-  const { size, value } = this.read(buffer, offset, type, rootNode)
+function readMapper (view, offset, { type, mappings }, rootNode) {
+  const { size, value } = this.read(view, offset, type, rootNode)
   let mappedValue = null
   const keys = Object.keys(mappings)
   for (let i = 0; i < keys.length; i++) {
@@ -33,7 +56,7 @@ function readMapper (buffer, offset, { type, mappings }, rootNode) {
   }
 }
 
-function writeMapper (value, buffer, offset, { type, mappings }, rootNode) {
+function writeMapper (value, view, offset, { type, mappings }, rootNode) {
   const keys = Object.keys(mappings)
   let mappedValue = null
   for (let i = 0; i < keys.length; i++) {
@@ -43,7 +66,7 @@ function writeMapper (value, buffer, offset, { type, mappings }, rootNode) {
     }
   }
   if (mappedValue == null) throw new Error(value + ' is not in the mappings value')
-  return this.write(mappedValue, buffer, offset, type, rootNode)
+  return this.write(mappedValue, view, offset, type, rootNode)
 }
 
 function sizeOfMapper (value, { type, mappings }, rootNode) {
@@ -59,67 +82,82 @@ function sizeOfMapper (value, { type, mappings }, rootNode) {
   return this.sizeOf(mappedValue, type, rootNode)
 }
 
-function readPString (buffer, offset, typeArgs, rootNode) {
-  const { size, count } = getCount.call(this, buffer, offset, typeArgs, rootNode)
+function readPString (view, offset, typeArgs, rootNode) {
+  const { size, count } = getCount.call(this, view, offset, typeArgs, rootNode)
   const cursor = offset + size
   const strEnd = cursor + count
-  if (strEnd > buffer.length) {
-    throw new PartialReadError('Missing characters in string, found size is ' + buffer.length +
+  if (strEnd > view.byteLength) {
+    throw new PartialReadError('Missing characters in string, found size is ' + view.byteLength +
     ' expected size was ' + strEnd)
   }
 
+  const encoding = typeArgs.encoding || 'utf8'
+  const bytes = new Uint8Array(view.buffer, view.byteOffset + cursor, count)
+  const decoder = getTextDecoder(encoding)
   return {
-    value: buffer.toString(typeArgs.encoding || 'utf8', cursor, strEnd),
+    value: decoder.decode(bytes),
     size: strEnd - offset
   }
 }
 
-function writePString (value, buffer, offset, typeArgs, rootNode) {
-  const length = Buffer.byteLength(value, 'utf8')
-  offset = sendCount.call(this, length, buffer, offset, typeArgs, rootNode)
-  buffer.write(value, offset, length, typeArgs.encoding || 'utf8')
+function writePString (value, view, offset, typeArgs, rootNode) {
+  const encoding = typeArgs.encoding || 'utf8'
+  const encoder = getTextEncoder(encoding)
+  const bytes = encoder ? encoder.encode(value) : utf8Encoder.encode(value)
+  const length = bytes.length
+  offset = sendCount.call(this, length, view, offset, typeArgs, rootNode)
+  const uint8View = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  uint8View.set(bytes, offset)
   return offset + length
 }
 
 function sizeOfPString (value, typeArgs, rootNode) {
-  const length = Buffer.byteLength(value, typeArgs.encoding || 'utf8')
+  const encoding = typeArgs.encoding || 'utf8'
+  const encoder = getTextEncoder(encoding)
+  const bytes = encoder ? encoder.encode(value) : utf8Encoder.encode(value)
+  const length = bytes.length
   const size = calcCount.call(this, length, typeArgs, rootNode)
   return size + length
 }
 
-function readBool (buffer, offset) {
-  if (offset + 1 > buffer.length) throw new PartialReadError()
-  const value = buffer.readInt8(offset)
+function readBool (view, offset) {
+  if (offset + 1 > view.byteLength) throw new PartialReadError()
+  const value = view.getInt8(offset)
   return {
     value: !!value,
     size: 1
   }
 }
 
-function writeBool (value, buffer, offset) {
-  buffer.writeInt8(+value, offset)
+function writeBool (value, view, offset) {
+  view.setInt8(offset, +value)
   return offset + 1
 }
 
-function readBuffer (buffer, offset, typeArgs, rootNode) {
-  const { size, count } = getCount.call(this, buffer, offset, typeArgs, rootNode)
+function readBuffer (view, offset, typeArgs, rootNode) {
+  const { size, count } = getCount.call(this, view, offset, typeArgs, rootNode)
   offset += size
-  if (offset + count > buffer.length) throw new PartialReadError()
+  if (offset + count > view.byteLength) throw new PartialReadError()
   return {
-    value: buffer.slice(offset, offset + count),
+    value: new Uint8Array(view.buffer, view.byteOffset + offset, count),
     size: size + count
   }
 }
 
-function writeBuffer (value, buffer, offset, typeArgs, rootNode) {
-  if (!(value instanceof Buffer)) value = Buffer.from(value)
-  offset = sendCount.call(this, value.length, buffer, offset, typeArgs, rootNode)
-  value.copy(buffer, offset)
+function writeBuffer (value, view, offset, typeArgs, rootNode) {
+  if (!(value instanceof Uint8Array)) {
+    value = new Uint8Array(value)
+  }
+  offset = sendCount.call(this, value.length, view, offset, typeArgs, rootNode)
+  const uint8View = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  uint8View.set(value, offset)
   return offset + value.length
 }
 
 function sizeOfBuffer (value, typeArgs, rootNode) {
-  if (!(value instanceof Buffer)) value = Buffer.from(value)
+  if (!(value instanceof Uint8Array)) {
+    value = new Uint8Array(value)
+  }
   const size = calcCount.call(this, value.length, typeArgs, rootNode)
   return size + value.length
 }
@@ -131,7 +169,7 @@ function readVoid () {
   }
 }
 
-function writeVoid (value, buffer, offset) {
+function writeVoid (value, view, offset) {
   return offset
 }
 
@@ -139,18 +177,19 @@ function generateBitMask (n) {
   return (1 << n) - 1
 }
 
-function readBitField (buffer, offset, typeArgs) {
+function readBitField (view, offset, typeArgs) {
   const beginOffset = offset
   let curVal = null
   let bits = 0
   const results = {}
+  const uint8View = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
   results.value = typeArgs.reduce((acc, { size, signed, name }) => {
     let currentSize = size
     let val = 0
     while (currentSize > 0) {
       if (bits === 0) {
-        if (buffer.length < offset + 1) { throw new PartialReadError() }
-        curVal = buffer[offset++]
+        if (view.byteLength < offset + 1) { throw new PartialReadError() }
+        curVal = uint8View[offset++]
         bits = 8
       }
       const bitsToRead = Math.min(currentSize, bits)
@@ -165,9 +204,10 @@ function readBitField (buffer, offset, typeArgs) {
   results.size = offset - beginOffset
   return results
 }
-function writeBitField (value, buffer, offset, typeArgs) {
+function writeBitField (value, view, offset, typeArgs) {
   let toWrite = 0
   let bits = 0
+  const uint8View = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
   typeArgs.forEach(({ size, signed, name }) => {
     const val = value[name]
     if ((!signed && val < 0) || (signed && val < -(1 << (size - 1)))) { throw new Error(value + ' < ' + signed ? (-(1 << (size - 1))) : 0) } else if ((!signed && val >= 1 << size) ||
@@ -179,13 +219,13 @@ function writeBitField (value, buffer, offset, typeArgs) {
       size -= writeBits
       bits += writeBits
       if (bits === 8) {
-        buffer[offset++] = toWrite
+        uint8View[offset++] = toWrite
         bits = 0
         toWrite = 0
       }
     }
   })
-  if (bits !== 0) { buffer[offset++] = toWrite << (8 - bits) }
+  if (bits !== 0) { uint8View[offset++] = toWrite << (8 - bits) }
   return offset
 }
 
@@ -195,32 +235,40 @@ function sizeOfBitField (value, typeArgs) {
   }, 0) / 8)
 }
 
-function readCString (buffer, offset, typeArgs) {
+function readCString (view, offset, typeArgs) {
+  const uint8View = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
   let size = 0
-  while (offset + size < buffer.length && buffer[offset + size] !== 0x00) { size++ }
-  if (buffer.length < offset + size + 1) { throw new PartialReadError() }
+  while (offset + size < view.byteLength && uint8View[offset + size] !== 0x00) { size++ }
+  if (view.byteLength < offset + size + 1) { throw new PartialReadError() }
 
+  const encoding = typeArgs?.encoding || 'utf8'
+  const bytes = new Uint8Array(view.buffer, view.byteOffset + offset, size)
+  const decoder = getTextDecoder(encoding)
   return {
-    value: buffer.toString(typeArgs?.encoding || 'utf8', offset, offset + size),
+    value: decoder.decode(bytes),
     size: size + 1
   }
 }
 
-function writeCString (value, buffer, offset, typeArgs) {
-  const length = Buffer.byteLength(value, typeArgs?.encoding || 'utf8')
-  buffer.write(value, offset, length, typeArgs?.encoding || 'utf8')
+function writeCString (value, view, offset, typeArgs) {
+  const encoding = typeArgs?.encoding || 'utf8'
+  const encoder = getTextEncoder(encoding)
+  const bytes = encoder ? encoder.encode(value) : utf8Encoder.encode(value)
+  const length = bytes.length
+  const uint8View = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+  uint8View.set(bytes, offset)
   offset += length
-  buffer.writeInt8(0x00, offset)
+  view.setInt8(offset, 0x00)
   return offset + 1
 }
 
 function sizeOfCString (value) {
-  const length = Buffer.byteLength(value, 'utf8')
-  return length + 1
+  const bytes = utf8Encoder.encode(value)
+  return bytes.length + 1
 }
 
-function readBitflags (buffer, offset, { type, flags, shift, big }, rootNode) {
-  const { size, value } = this.read(buffer, offset, type, rootNode)
+function readBitflags (view, offset, { type, flags, shift, big }, rootNode) {
+  const { size, value } = this.read(view, offset, type, rootNode)
   let f = {}
   if (Array.isArray(flags)) {
     for (const [k, v] of Object.entries(flags)) {
@@ -240,7 +288,7 @@ function readBitflags (buffer, offset, { type, flags, shift, big }, rootNode) {
   return { value: result, size }
 }
 
-function writeBitflags (value, buffer, offset, { type, flags, shift, big }, rootNode) {
+function writeBitflags (value, view, offset, { type, flags, shift, big }, rootNode) {
   let f = {}
   if (Array.isArray(flags)) {
     for (const [k, v] of Object.entries(flags)) {
@@ -257,7 +305,7 @@ function writeBitflags (value, buffer, offset, { type, flags, shift, big }, root
   for (const key in f) {
     if (value[key]) val |= f[key]
   }
-  return this.write(val, buffer, offset, type, rootNode)
+  return this.write(val, view, offset, type, rootNode)
 }
 
 function sizeOfBitflags (value, { type, flags, shift, big }, rootNode) {
