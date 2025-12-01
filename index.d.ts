@@ -81,11 +81,11 @@ declare class ProtodefPartialError extends Error {
 
 declare module 'protodef' {
   export const Compiler: {
-    ReadCompiler: typeof ProtodefReadCompiler
-    WriteCompiler: typeof ProtodefWriteCompiler
-    SizeOfCompiler: typeof ProtodefSizeOfCompiler
-    ProtoDefCompiler: typeof ProtodefCompiler
-    CompiledProtodef: typeof CompiledProtodef
+    ReadCompiler: ProtodefReadCompiler
+    WriteCompiler: ProtodefWriteCompiler
+    SizeOfCompiler: ProtodefSizeOfCompiler
+    ProtoDefCompiler: ProtodefCompiler
+    CompiledProtoDef: CompiledProtoDef
   }
   export const utils: {
     getField(countField: string, context: object): any | undefined
