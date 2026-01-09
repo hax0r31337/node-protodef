@@ -1,84 +1,54 @@
 const { PartialReadError } = require('../utils')
 
-class SignedBigInt extends Array {
-  valueOf() { return BigInt.asIntN(64, BigInt(this[0]) << 32n) | BigInt.asUintN(32, BigInt(this[1])) }
-  toString() { return this.valueOf().toString() }
-}
-
-class UnsignedBigInt extends Array {
-  valueOf() { return BigInt.asUintN(64, BigInt(this[0]) << 32n) | BigInt.asUintN(32, BigInt(this[1])) }
-  toString() { return this.valueOf().toString() }
-}
-
 function readI64(view, offset) {
   if (offset + 8 > view.byteLength) { throw new PartialReadError() }
   return {
-    value: new SignedBigInt(view.getInt32(offset, false), view.getInt32(offset + 4, false)),
+    value: view.getBigInt64(offset, false),
     size: 8
   }
 }
 
 function writeI64(value, view, offset) {
-  if (typeof value === 'bigint') {
-    view.setBigInt64(offset, value, false)
-  } else {
-    view.setInt32(offset, value[0], false)
-    view.setInt32(offset + 4, value[1], false)
-  }
+  view.setBigInt64(offset, BigInt(value), false)
   return offset + 8
 }
 
 function readLI64(view, offset) {
   if (offset + 8 > view.byteLength) { throw new PartialReadError() }
   return {
-    value: new SignedBigInt(view.getInt32(offset + 4, true), view.getInt32(offset, true)),
+    value: view.getBigInt64(offset, true),
     size: 8
   }
 }
 
 function writeLI64(value, view, offset) {
-  if (typeof value === 'bigint') {
-    view.setBigInt64(offset, value, true)
-  } else {
-    view.setInt32(offset + 4, value[0], true)
-    view.setInt32(offset, value[1], true)
-  }
+  view.setBigInt64(offset, BigInt(value), true)
   return offset + 8
 }
 
 function readU64(view, offset) {
   if (offset + 8 > view.byteLength) { throw new PartialReadError() }
   return {
-    value: new UnsignedBigInt(view.getUint32(offset, false), view.getUint32(offset + 4, false)),
+    value: view.getBigUint64(offset, false),
     size: 8
   }
 }
 
 function writeU64(value, view, offset) {
-  if (typeof value === 'bigint') {
-    view.setBigUint64(offset, value, false)
-  } else {
-    view.setUint32(offset, value[0], false)
-    view.setUint32(offset + 4, value[1], false)
-  }
+  view.setBigUint64(offset, BigInt(value), false)
   return offset + 8
 }
 
 function readLU64(view, offset) {
   if (offset + 8 > view.byteLength) { throw new PartialReadError() }
   return {
-    value: new UnsignedBigInt(view.getUint32(offset + 4, true), view.getUint32(offset, true)),
+    value: view.getBigUint64(offset, true),
     size: 8
   }
 }
 
 function writeLU64(value, view, offset) {
-  if (typeof value === 'bigint') {
-    view.setBigUint64(offset, value, true)
-  } else {
-    view.setUint32(offset + 4, value[0], true)
-    view.setUint32(offset, value[1], true)
-  }
+  view.setBigUint64(offset, BigInt(value), true)
   return offset + 8
 }
 
