@@ -1,100 +1,136 @@
-type ReadFn = (buffer: Buffer, cursor: number, _fieldInfo: any, rootNodes: any) => any
-type WriteFn = (value: any, buffer: Buffer, offset: number, _fieldInfo: any, rootNode: any) => number
-type SizeOfFn = ((value: any, _fieldInfo: any, rootNode: any) => number)
+declare namespace ProtoDef {
+  type PacketBuffer = Uint8Array | ArrayBuffer | DataView
 
-type FieldInfo = string | { type: string, typeArgs: any }
-type TypeFunc = [ReadFn, WriteFn, number | SizeOfFn,?any]
-type TypeParams = any
-declare interface TypeParamsCounted { count: number | FieldInfo, countType: TypeDef }
-type TypeDef = 'native' | TypeFunc | [string, any]
-type TypesDef = { [field: string]: TypeDef }
-type Protocol = {
-  types: TypesDef
-  [field: string]: TypeDef | Protocol
-}
-declare type TypeDefKind = 'native' | 'context' | 'parametrizable'
-
-declare abstract class ProtodefBaseCompiler {
-  primitiveTypes = {}
-  native = {}
-  context = {}
-  types: TypesDef
-  scopeStack = []
-  parameterizableTypes = {}
-  addNativeType(type: string, fn: CallableFunction): void
-  addContextType(type: string, fn: CallableFunction): void
-  addParametrizableType(type: string, maker: CallableFunction): void
-  addTypes(types: { [key: string]: [TypeDefKind, CallableFunction] }): void
-  addProtocol(protocolData: Protocol, path: string[]): void
-  protected addTypesToCompile(types: any): void
-  protected indent(code: string, indent: string): string
-  protected getField(name: string): any
-  generate(): string
-  compile(code: string): Function<any>
-  protected wrapCode(code: string, args: string[]): string
-  protected compileType(type: string | any[]): string
-}
-
-declare class ProtodefReadCompiler extends ProtodefBaseCompiler {
-  private callType(value: string, type: string | any[], offsetExpr: string, args: string[]): string
-}
-
-declare class ProtodefWriteCompiler extends ProtodefBaseCompiler {
-  private callType(value: string, type: string | any[], offsetExpr: string, args: string[]): string
-}
-
-declare class ProtodefSizeOfCompiler extends ProtodefBaseCompiler {
-  private callType(value: string, type: string | any[], args: string[]): string
-}
-
-declare class ProtodefCompiler {
-  readCompiler: ProtodefReadCompiler
-  writeCompiler: ProtodefWriteCompiler
-  sizeOfCompiler: ProtodefSizeOfCompiler
-  addTypes(types: { [key: string]: [TypeDefKind, CallableFunction] }): void
-  addProtocol(protocolData: Protocol, path: string[]): void
-  addTypesToCompile(types: any): void
-  addVariable(key: string, val: any): void
-  compileProtoDefSync(options?: { printCode?: boolean }): CompiledProtoDef
-}
-
-declare abstract class AbstractProtoDefInterface {
-  read: ReadFn
-  write: WriteFn
-  sizeOf: SizeOfFn
-  createPacketBuffer(type: string, packet: any): Uint8Array
-  parsePacketBuffer(type: string, buffer: Uint8Array | ArrayBuffer | DataView, offset = 0, assertSize = true): any
-}
-
-declare class CompiledProtoDef extends AbstractProtoDefInterface {
-  private sizeOfCtx: SizeOfFn
-  private writeCtx: WriteFn
-  private readCtx: ReadFn
-  constructor(sizeOfCtx: SizeOfFn, writeCtx: WriteFn, readCtx: ReadFn)
-  setVariable(key: string, val: any): void
-}
-
-declare class ProtodefPartialError extends Error {
-  partialReadError: true
-  constructor(message?: string)
-}
-
-declare module 'protodef' {
-  export const Compiler: {
-    ReadCompiler: typeof ProtodefReadCompiler
-    WriteCompiler: typeof ProtodefWriteCompiler
-    SizeOfCompiler: typeof ProtodefSizeOfCompiler
-    ProtoDefCompiler: typeof ProtodefCompiler
-    CompiledProtoDef: CompiledProtoDef
+  interface ReadResult<T = unknown> {
+    value: T
+    size: number
   }
-  export const utils: {
-    getField(countField: string, context: object): any | undefined
-    getFieldInfo(fieldInfo: FieldInfo): FieldInfo
-    addErrorField(e: Error & { field: string }, field: string): Error & { field: string }
-    getCount(buffer: Buffer, offset: number, options: TypeParamsCounted, rootNode: any): { count: number, size: number }
-    sendCount(len: number, buffer: Buffer, offset: number, options: TypeParamsCounted, rootNode: any): number
-    calcCount(len: number, options: TypeParamsCounted, rootNode: any): number
-    tryCatch(tryfn: CallableFunction, catchfn: CallableFunction): any
-    PartialReadError
+
+  type TypeDefinition = string | [string, any]
+  type TypeDefinitions = Record<string, TypeDefinition>
+
+  interface Protocol {
+    types?: TypeDefinitions
+    [key: string]: Protocol | TypeDefinitions | undefined
   }
+
+  interface FieldInfoObject {
+    type: string
+    typeArgs?: any
+  }
+
+  type FieldInfo = string | [string, any] | FieldInfoObject
+
+  interface CountOptions {
+    count?: number | string
+    countType?: FieldInfo
+  }
+
+  type TypeDefKind = 'native' | 'context' | 'parametrizable'
+  type CompilerImplementation = number | string | ((...args: any[]) => any)
+  type CompilerTypeDefinition = [TypeDefKind, CompilerImplementation]
+  type CompilerTypeDefinitions = Record<string, CompilerTypeDefinition>
+
+  interface CompilerTypeSet {
+    Read: CompilerTypeDefinitions
+    Write: CompilerTypeDefinitions
+    SizeOf: CompilerTypeDefinitions
+  }
+
+  interface CompiledContext {
+    [key: string]: unknown
+  }
+
+  interface BaseCompiler {
+    primitiveTypes: Record<string, string>
+    native: Record<string, unknown>
+    context: Record<string, string>
+    types: TypeDefinitions
+    scopeStack: Array<Record<string, string>>
+    parameterizableTypes: Record<string, (...args: any[]) => string>
+    addNativeType(type: string, fn: CompilerImplementation): void
+    addParametrizableType(type: string, maker: (...args: any[]) => string): void
+    addTypes(types: CompilerTypeDefinitions): void
+    addTypesToCompile(types: TypeDefinitions): void
+    addProtocol(protocolData: Protocol, path: string[]): void
+    indent(code: string, indent?: string): string
+    getField(name: string, noAssign?: boolean): string
+    generate(): string
+    compile(code: string): CompiledContext
+    wrapCode(code: string, args?: string[]): string
+    compileType(type: TypeDefinition): string
+  }
+
+  interface ReadCompiler extends BaseCompiler {
+    callType(type: TypeDefinition, offsetExpr?: string, args?: string[]): string
+  }
+
+  interface WriteCompiler extends BaseCompiler {
+    callType(value: string, type: TypeDefinition, offsetExpr?: string, args?: string[]): string
+  }
+
+  interface SizeOfCompiler extends BaseCompiler {
+    callType(value: string, type: TypeDefinition, args?: string[]): string
+  }
+
+  interface CompiledProtodef {
+    sizeOfCtx: CompiledContext
+    writeCtx: CompiledContext
+    readCtx: CompiledContext
+    read<T = unknown>(view: DataView, cursor: number, type: string): ReadResult<T>
+    write(value: any, view: DataView, cursor: number, type: string): number
+    setVariable(key: string, val: any): void
+    sizeOf(value: any, type: string): number
+    createPacketBuffer(type: string, packet: any): Uint8Array
+    parsePacketBuffer<T = unknown>(type: string, buffer: PacketBuffer, offset?: number, assertSize?: boolean): T
+  }
+
+  interface ProtoDefCompiler {
+    readCompiler: ReadCompiler
+    writeCompiler: WriteCompiler
+    sizeOfCompiler: SizeOfCompiler
+    addTypes(types: CompilerTypeSet): void
+    addTypesToCompile(types: TypeDefinitions): void
+    addProtocol(protocolData: Protocol, path: string[]): void
+    addVariable(key: string, val: any): void
+    compileProtoDefSync(options?: { printCode?: boolean }): CompiledProtodef
+  }
+
+  interface PartialReadError extends Error {
+    partialReadError: true
+  }
+
+  interface PartialReadErrorConstructor {
+    new(message?: string): PartialReadError
+  }
+
+  interface UtilsExports {
+    getField(countField: string, context: any): any
+    getFieldInfo(fieldInfo: FieldInfo): FieldInfoObject
+    addErrorField<T extends Error & { field?: string }>(e: T, field: string): never
+    getCount(this: { read: (...args: any[]) => ReadResult<number> }, buffer: DataView, offset: number, options: CountOptions, rootNode: any): { count: number, size: number }
+    sendCount(this: { write: (...args: any[]) => number }, len: number, buffer: DataView, offset: number, options: CountOptions, rootNode: any): number
+    calcCount(this: { sizeOf: (...args: any[]) => number }, len: number, options: CountOptions, rootNode: any): number
+    tryCatch<T>(tryfn: () => T, catchfn: (err: any) => void): T | undefined
+    tryDoc<T>(tryfn: () => T, field: string): T
+    PartialReadError: PartialReadErrorConstructor
+  }
+
+  interface CompilerExports {
+    ReadCompiler: new () => ReadCompiler
+    WriteCompiler: new () => WriteCompiler
+    SizeOfCompiler: new () => SizeOfCompiler
+    ProtoDefCompiler: new () => ProtoDefCompiler
+    CompiledProtodef: new (sizeOfCtx: CompiledContext, writeCtx: CompiledContext, readCtx: CompiledContext) => CompiledProtodef
+  }
+
+  const Compiler: CompilerExports
+  const utils: UtilsExports
 }
+
+declare const protodef: {
+  Compiler: ProtoDef.CompilerExports
+  utils: ProtoDef.UtilsExports
+}
+
+export = protodef
