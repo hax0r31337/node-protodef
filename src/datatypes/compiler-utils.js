@@ -40,7 +40,7 @@ module.exports = {
       code += 'if (offset + count > buffer.byteLength) {\n'
       code += '  throw new PartialReadError()\n'
       code += '}\n'
-      code += 'const slicedView = new DataView(buffer.buffer, buffer.byteOffset + offset, count)\n'
+      code += 'const slicedView = new Uint8Array(buffer.buffer, buffer.byteOffset + offset, count)\n'
       code += 'return { value: slicedView, size: count + countSize }'
       return compiler.wrapCode(code)
     }],
@@ -265,7 +265,7 @@ return (ctx.${type})(val)
 }
 
 // Convert hexadecimal keys to decimal
-function sanitizeMappings (json) {
+function sanitizeMappings(json) {
   const ret = {}
   for (let key in json) {
     let val = json[key]
@@ -278,7 +278,7 @@ function sanitizeMappings (json) {
   return ret
 }
 
-function swapMappings (json) {
+function swapMappings(json) {
   const ret = {}
   for (let key in json) {
     const val = json[key]
@@ -288,7 +288,7 @@ function swapMappings (json) {
   return ret
 }
 
-function hex2dec (num) {
+function hex2dec(num) {
   if ((num.match(/^0x[0-9a-f]+$/i))) { return parseInt(num.substring(2), 16) }
   return num
 }
